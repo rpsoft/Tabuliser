@@ -2,6 +2,7 @@
   "dependencies": {
     "axios": "^0.21.1",
     "cheerio": "*",
-    "fs": "*"
+    "fs": "*",
+    "just-clone": "^3.2.1"
   }
 }

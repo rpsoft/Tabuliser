@@ -1,25 +1,17 @@
 const cheerio = require('cheerio');
 const axios = require('axios');
 const fs = require('fs');
+const clone = require( 'just-clone');
+const { mainModule } = require('process');
 
 
-const annotation = {"annotations":
-[
-    {"location":"Row","content":{"arms":true,"measures":true},"qualifiers":{},"number":"2","subAnnotation":false},
-    {"location":"Row","content":{"measures":true,"p-interaction":true},"qualifiers":{},"number":"3","subAnnotation":false},
-    // {"location":"Row","content":{"arms":true,"measures":true},"qualifiers":{},"number":"17","subAnnotation":false},
-    // {"location":"Row","content":{"measures":true,"p-interaction":true},"qualifiers":{},"number":"18","subAnnotation":false},
-    {"location":"Col","content":{"characteristic_name":true, "characteristic_level":true },"qualifiers":{},"number":"1","subAnnotation":false},
-    {"location":"Col","content":{"characteristic_name":true, "characteristic_level":true },"qualifiers":{"bold":true},"number":"2","subAnnotation":false},
-    {"location":"Col","content":{"characteristic_level":true},"qualifiers":{},"number":"2","subAnnotation":false}
-]}
+async function getFileResults (annotation, filePath){
 
-
-async function main (annotation){
+    annotation.annotations.map( (ann, a) => {ann.pos = a})
 
     var tableData = new Promise( (resolve, reject) => { 
 
-        fs.readFile("exampleTable.html", "utf8", (err, data)=>{
+        fs.readFile(filePath, "utf8", (err, data)=>{
             if ( err ){
                 reject(err)
             }
@@ -29,18 +21,14 @@ async function main (annotation){
 
     })
     
-    // const getAllAttributes = function (node) {
-    //     return node.attributes || Object.keys(node.attribs).map(
-    //         name => ({ name, value: node.attribs[name] })
-    //     );
-    // };
-
     var $ = cheerio.load( await tableData)
 
     var maxColumn = $("tr").toArray().reduce ( (acc,item, i) => {return $(item).children().length > acc ? $(item).children().length : acc }, 0 )
     var maxRows = $("tr").toArray().length
 
     var matrix = Array.from({length: maxRows}, e => Array(maxColumn).fill({colcontent: {}, rowcontent: {}, text: new String("")}));
+
+        matrix = clone(matrix)
     
     $("tr").toArray().map( 
         (row, r) => {
@@ -107,7 +95,12 @@ async function main (annotation){
             var isEmptyRow = matrix[r].reduce( (acc, col, c) => { return (c > maxColHeader) ? (acc && (col.text == matrix[r][maxColHeader+1].text)) : acc && true}, true)
             
             // similarly, all but the last one should be the same, if empty row with p-value.
-            var isEmptyRowWithPValue = matrix[r].reduce( (acc, col, c) => acc && (col.text == matrix[r][maxColHeader+1].text) && (col.text != matrix[r][maxColumn-1].text), true)
+            var isEmptyRowWithPValue = matrix[r].reduce( (acc, col, c) => {
+                
+                var answer = (c > maxColHeader) && ( c < (matrix[r].length-1)) ? (acc && (col.text == matrix[r][maxColHeader+1].text) && (col.text != matrix[r][maxColumn-1].text)) : acc && true
+
+                return answer
+            }, true)
             
             matrix[r].map(
                 (col,c) => { 
@@ -177,8 +170,6 @@ async function main (annotation){
 
     }
 
-  
-
     var headerRows = []
     var headerCols = []
     var existingHeadersCount = {}
@@ -198,8 +189,6 @@ async function main (annotation){
     
     })
 
-
-
     // Spread row header values
     annotation.annotations.filter( el => el.location == "Row").map( el =>{ 
             matrix[el.number-1].map( (mc,c) => {
@@ -212,62 +201,88 @@ async function main (annotation){
                 })
             })
 
-    var colHeadersBuffer = annotation.annotations.filter( el => el.location == "Col").reduce( (acc,el) => { acc[el.annotationKey] = ""; return acc }, {} )
+    annotation.annotations.filter( el => el.location == "Col").map( el =>{ 
 
-    matrix.map( (row, r) => {
-        annotation.annotations.filter( el => el.location == "Col").map( el =>{ 
-     
-                if( headerRows.indexOf(r) < 0 && (r > Math.min(...headerRows)) ){
-                    if ( r == 5 ){
-                        debugger
-                    }
+        matrix.map( (row, r) => { 
+
+            if( headerRows.indexOf(r) < 0 && (r > Math.min(...headerRows)) ){
     
                     if ( r > 0 && (matrix[r][el.number-1].text.trim().length == 0 )) { // Fill space in column with previous row element. Spreading headings over the columns
-
-                        matrix[r][el.number-1] = { ...matrix[r][el.number-1], text: matrix[r-1][el.number-1].text.replace(/\s+/g, ' ').trim() }
+                        matrix[r][el.number-1] = clone ( matrix[r-1][el.number-1] )
+                        matrix[r][el.number-1].rowcontent = {}
                     }
  
                     if ( Object.keys( el.qualifiers ).length > 0){
                         if ( Object.keys(el.qualifiers).reduce( (acc,ele) => acc && matrix[r][el.number-1].format.indexOf(ele) > -1 , true ) ){
-                 
-                            colHeadersBuffer[el.annotationKey] = matrix[r][el.number-1].text.replace(/\s+/g, ' ').trim()
-                        
-                            matrix[r][el.number-1].colcontent = {...colHeadersBuffer}
-                    
+                            if ( Object.keys(matrix[r][el.number-1].colcontent).length == 0 )
+                            matrix[r][el.number-1].colcontent[el.annotationKey] = matrix[r][el.number-1].text.replace(/\s+/g, ' ').trim()
                         }
                     } else {
-                        
-                        colHeadersBuffer[el.annotationKey] = matrix[r][el.number-1].text.replace(/\s+/g, ' ').trim()
-
-                        matrix[r][el.number-1].colcontent = {...colHeadersBuffer} 
+                        if ( Object.keys(matrix[r][el.number-1].colcontent).length == 0 )
+                        matrix[r][el.number-1].colcontent[el.annotationKey] = matrix[r][el.number-1].text.replace(/\s+/g, ' ').trim()
                     }
                                        
                     headerCols = Array.from(new Set([...headerCols,el.number-1]))
 
                 }
             });
+
         })
 
+
+
+    var colHeadersBuffer = annotation.annotations.filter( el => el.location == "Col").reduce( (acc,el) => { acc[el.annotationKey] = ""; return acc }, {} )
+
+    var colPositions = annotation.annotations.filter( el => el.location == "Col").reduce( (acc, ann, a) => {acc[ann.annotationKey] = {pos: ann.pos, subAnnotation: ann.subAnnotation}; return acc }, { } )
+    
     var dataResults = matrix.reduce ( (acc, row, r) => {
+            
+            var cpos = colPositions
+
+            if ( headerRows.indexOf(r) < 0){
+
+                for ( var h in headerCols ){ 
+                    var hcol = headerCols[h]
+                
+                    Object.keys(matrix[r][hcol].colcontent).map( chead => {
+
+                        var pos = colPositions[chead].pos
+                        var colHeadersToEmpty = Object.keys(colPositions).filter( chead => colPositions[chead].subAnnotation && (colPositions[chead].pos > pos ))
+                        colHeadersToEmpty.map( chead => { colHeadersBuffer[chead] = "" })                      
+                        
+                    })
+
+                    colHeadersBuffer = {...colHeadersBuffer, ...matrix[r][hcol].colcontent}
+
+                    // console.log(colHeadersBuffer)
+                }
+            }
 
             row.map( (currentCell,c) => {
-                
-                if ( r > Math.max(...headerRows) && c > Math.max(...headerCols)){
-                    
-                    if ( acc.length == 12){
-                        debugger
-                    }
 
-                    var newHeaders = {}
+                if ( r >= Math.min(...headerRows) && c > Math.max(...headerCols)){
 
-                    for ( var h in headerCols ){ 
-                        var hcol = headerCols[h]
-                    
-                        newHeaders = {...newHeaders, ...matrix[r][hcol].colcontent }
-                    }
+                    var newHeaders = {...newHeaders, ...colHeadersBuffer }
 
-                    for ( var h in headerRows ){ 
-                        var hrow = headerRows[h]
+                    var headerGroups = headerRows.filter( hr => hr < r ).reduce( (acc,hrow) => {        
+                            if (acc.buffer.length == 0 ){
+                                acc.buffer.push(hrow)
+                            } else {
+                                if ( hrow - acc.buffer[acc.buffer.length-1] == 1 ){
+                                    acc.buffer.push(hrow)
+                                } else {
+                                    acc.groups.push(clone(acc.buffer))
+                                    acc.buffer = [hrow]
+                                }
+                            }
+
+                            return acc
+                        }, {groups: [], buffer: [] })
+
+                    headerGroups = [...headerGroups.groups, headerGroups.buffer]
+
+                    for ( var h in headerGroups[headerGroups.length-1] ){ 
+                        var hrow = headerGroups[headerGroups.length-1][h]
                     
                         newHeaders = {...newHeaders, ...matrix[hrow][c].rowcontent }
                         
@@ -287,15 +302,38 @@ async function main (annotation){
             return acc
         }, [])
 
-    debugger
+    dataResults = dataResults.filter( res => {
 
-    
+        var anyPresent = Object.keys(colHeadersBuffer).reduce( (acc, hcol) => { return acc || res[hcol] == res.value }, false )
+
+        
+        return res.value.length > 0 && (!anyPresent) && headerRows.indexOf(res.row) < 0
 
 
+    }) 
 
+    return dataResults
 }
 
 
+async function main () {
 
+    const annotation = {"annotations":
+        [
+            {"location":"Row","content":{"arms":true,"measures":true},"qualifiers":{},"number":"2","subAnnotation":false},
+            {"location":"Row","content":{"measures":true,"p-interaction":true},"qualifiers":{},"number":"3","subAnnotation":false},
+            {"location":"Row","content":{"arms":true,"measures":true},"qualifiers":{},"number":"17","subAnnotation":false},
+            {"location":"Row","content":{"measures":true,"p-interaction":true},"qualifiers":{},"number":"18","subAnnotation":false},
+            {"location":"Col","content":{"characteristic_name":true, "characteristic_level":true },"qualifiers":{},"number":"1","subAnnotation":false},
+            {"location":"Col","content":{"measures":true, "p-interaction":true },"qualifiers":{"empty_row_with_p_value":true},"number":"2","subAnnotation":false},
+            {"location":"Col","content":{"characteristic_name":true, "characteristic_level":true },"qualifiers":{"bold":true},"number":"2","subAnnotation":false},
+            {"location":"Col","content":{"characteristic_level":true},"qualifiers":{},"number":"2","subAnnotation":true}
+        ]}
 
-main(annotation)
+    var results = await getFileResults(annotation, "exampleTable.html")
+
+    debugger
+
+}
+
+main()
